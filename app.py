@@ -683,3 +683,98 @@ if run_button:
 
 else:
     st.info("Pick a date and click 'Score games for selected date' to run the model.")
+
+# =====================================================================
+# 6PM EST–controlled Injury Loader
+# =====================================================================
+import pytz
+from datetime import datetime, time
+
+@st.cache_data
+def fetch_injuries_raw_and_agg(date_str: str):
+    """
+    Injury API loader that is allowed to call ONLY once per day
+    and not before 6 PM EST. Before 6 PM EST, always return cache.
+    """
+    cache_key = f"injury_call_{date_str}"
+
+    # Retrieve last saved call (if exists)
+    last_info = st.session_state.get(cache_key, None)
+
+    # Current Eastern Time
+    eastern = pytz.timezone("US/Eastern")
+    now_est = datetime.now(eastern)
+
+    cutoff = time(18, 0)  # 6:00 PM EST
+    should_call_api = True
+
+    # -------------------------------------------------------------
+    # Decide whether calling the API is allowed
+    # -------------------------------------------------------------
+    if last_info is not None:
+        last_call_time = last_info["timestamp"]
+        
+        if last_call_time.date() == now_est.date():
+            # Already called today → only call again after 6 PM EST
+            if now_est.time() < cutoff:
+                should_call_api = False
+
+    # -------------------------------------------------------------
+    # USE CACHED COPY BEFORE 6PM EST
+    # -------------------------------------------------------------
+    if not should_call_api and last_info is not None:
+        return last_info["raw_df"], last_info["team_agg"]
+
+    # -------------------------------------------------------------
+    # OTHERWISE → Call the injury API (only once per day)
+    # -------------------------------------------------------------
+    url = f"https://{RAPIDAPI_HOST}/injuries/{date_str}"
+    headers = {
+        "X-RapidAPI-Key": RAPIDAPI_KEY,
+        "X-RapidAPI-Host": RAPIDAPI_HOST,
+    }
+
+    try:
+        resp = requests.get(url, headers=headers)
+        if resp.status_code in (404, 429):
+            # No injury data available
+            raw_df = pd.DataFrame()
+            team_agg = pd.DataFrame()
+        else:
+            resp.raise_for_status()
+            data = resp.json()
+            raw_df = pd.DataFrame(data)
+
+            if not raw_df.empty:
+                # Identify “starters” or key players
+                raw_df["isStar"] = raw_df["player_status"].str.contains(
+                    "starter", case=False, na=False
+                )
+
+                team_agg = (
+                    raw_df.groupby("team")
+                    .agg(
+                        numPlayersOut=("player", "count"),
+                        starOut=("isStar", "sum"),
+                    )
+                    .reset_index()
+                    .rename(columns={"team": "teamName"})
+                )
+            else:
+                team_agg = pd.DataFrame()
+
+    except Exception:
+        raw_df = pd.DataFrame()
+        team_agg = pd.DataFrame()
+
+    # -------------------------------------------------------------
+    # Save to shared session cache
+    # -------------------------------------------------------------
+    st.session_state[cache_key] = {
+        "timestamp": now_est,
+        "raw_df": raw_df,
+        "team_agg": team_agg,
+    }
+
+    return raw_df, team_agg
+
