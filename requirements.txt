@@ -5,3 +5,4 @@ scikit-learn
 catboost
 requests
 joblib
+streamlit-autorefresh
