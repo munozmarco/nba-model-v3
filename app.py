@@ -225,7 +225,7 @@ def fetch_raw_odds():
     resp.raise_for_status()
     return resp.json()
 
-def build_odds_df_from_raw_games(raw_games, target_date=None):
+def build_odds_df_from_raw_games(raw_games, target_date=None, tz="America/Chicago"):
     rows = []
 
     if target_date is not None:
@@ -233,9 +233,13 @@ def build_odds_df_from_raw_games(raw_games, target_date=None):
 
     for g in raw_games:
         game_id = g.get("id")
-        commence_time = pd.to_datetime(g.get("commence_time"), utc=True)
 
-        if target_date is not None and commence_time.date() != target_date:
+        # Odds API gives commence_time in UTC; convert to local tz for date filtering
+        commence_utc = pd.to_datetime(g.get("commence_time"), utc=True)
+        commence_local = commence_utc.tz_convert(tz)
+
+        # Only keep games whose LOCAL date matches the selected date
+        if target_date is not None and commence_local.date() != target_date:
             continue
 
         home_full = g.get("home_team")
@@ -279,10 +283,10 @@ def build_odds_df_from_raw_games(raw_games, target_date=None):
         if m_totals is not None and m_totals.get("outcomes"):
             total_points = m_totals["outcomes"][0].get("point")
 
-        # Home row
+        # Use local time as the game datetime for display / filtering
         rows.append({
             "api_game_id": game_id,
-            "gameDateTimeEst": commence_time,
+            "gameDateTimeEst": commence_local,   # local timezone
             "teamName": home_team,
             "opponentTeamName": away_team,
             "home": 1,
@@ -290,10 +294,9 @@ def build_odds_df_from_raw_games(raw_games, target_date=None):
             "closingSpread_team": spread_home,
             "closingTotal": total_points,
         })
-        # Away row
         rows.append({
             "api_game_id": game_id,
-            "gameDateTimeEst": commence_time,
+            "gameDateTimeEst": commence_local,
             "teamName": away_team,
             "opponentTeamName": home_team,
             "home": 0,
@@ -306,6 +309,7 @@ def build_odds_df_from_raw_games(raw_games, target_date=None):
     if not odds_df.empty:
         odds_df = odds_df.sort_values("gameDateTimeEst").reset_index(drop=True)
     return odds_df
+
 
 # ========= MODEL PREDICTION HELPERS =========
 
